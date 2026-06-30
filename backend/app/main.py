@@ -231,11 +231,47 @@ def smart_ranking():
                     broker_score,
                     low_price,
                     high_price,
-                    COALESCE(broker_score, 0) AS smart_score
+
+                    ROUND(
+                        (
+                            COALESCE(broker_score, 0) * 0.4
+                        ) +
+
+                        (
+                            CASE
+                                WHEN foreign_flow >= 1000000000 THEN 100
+                                WHEN foreign_flow >= 500000000 THEN 80
+                                WHEN foreign_flow >= 100000000 THEN 60
+                                WHEN foreign_flow > 0 THEN 40
+                                ELSE 20
+                            END
+                        ) * 0.3 +
+
+                        (
+                            CASE
+                                WHEN signal = 'BUY' THEN 100
+                                WHEN signal = 'HOLD' THEN 60
+                                WHEN signal = 'SELL' THEN 20
+                                ELSE 0
+                            END
+                        ) * 0.2 +
+
+                        (
+                            CASE
+                                WHEN akumulasi = 'tinggi' THEN 100
+                                WHEN akumulasi = 'sedang' THEN 70
+                                WHEN akumulasi = 'rendah' THEN 40
+                                ELSE 0
+                            END
+                        ) * 0.1
+
+                    ,2) AS smart_score
+
                 FROM stocks
-                ORDER BY broker_score DESC
+                ORDER BY smart_score DESC
             """)
         )
+
         return [dict(row._mapping) for row in result]
 
 

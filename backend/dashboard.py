@@ -3,6 +3,8 @@ import requests
 import pandas as pd
 import plotly.express as px
 from io import BytesIO
+import yfinance as yf
+import plotly.graph_objects as go
 
 API_URL = "http://127.0.0.1:8000"
 
@@ -45,7 +47,8 @@ menu = st.sidebar.selectbox(
         "Grafik Foreign Flow",
         "Export Excel",
         "Top 10 Smart Score",
-        "Alert Trading"
+        "Alert Trading",
+        "Candlestick Chart"
     ]
 )
 
@@ -352,3 +355,87 @@ elif menu == "Alert Trading":
                     st.warning("⚠️ Risk Reward Kurang Menarik")
 
             st.divider()
+
+elif menu == "Candlestick Chart":
+
+    st.subheader("📈 Candlestick Chart")
+
+    kode = st.text_input(
+        "Kode Saham",
+        value="BBCA"
+    ).upper()
+
+    periode = st.selectbox(
+        "Periode",
+        [
+            "1mo",
+            "3mo",
+            "6mo",
+            "1y"
+        ]
+    )
+
+    if st.button("Tampilkan Grafik"):
+
+        symbol = f"{kode}.JK"
+
+        data = yf.download(
+            symbol,
+            period=periode,
+            auto_adjust=False,
+            progress=False
+        )
+
+        if data.empty:
+            st.error(
+                f"Data {kode} tidak ditemukan."
+            )
+
+        else:
+
+            # Perbaikan untuk yfinance versi terbaru
+            if isinstance(
+                data.columns,
+                pd.MultiIndex
+            ):
+                data.columns = (
+                    data.columns
+                    .get_level_values(0)
+                )
+
+            data = data.reset_index()
+
+            st.write(
+                "Preview Data:"
+            )
+
+            st.dataframe(
+                data.tail()
+            )
+
+            fig = go.Figure()
+
+            fig.add_trace(
+                go.Candlestick(
+                    x=data["Date"],
+                    open=data["Open"].astype(float),
+                    high=data["High"].astype(float),
+                    low=data["Low"].astype(float),
+                    close=data["Close"].astype(float),
+                    name=kode
+                )
+            )
+
+            fig.update_layout(
+                title=f"📈 Candlestick {kode}",
+                xaxis_title="Tanggal",
+                yaxis_title="Harga",
+                xaxis_rangeslider_visible=False,
+                template="plotly_white",
+                height=700
+            )
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
