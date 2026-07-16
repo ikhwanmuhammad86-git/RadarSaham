@@ -10,10 +10,22 @@ import plotly.graph_objects as go
 
 from ai_scanner import render_ai_scanner_page
 from candlestick import render_candlestick_page
+from theme import load_theme
+from components import (
+    kpi_card,
+    section_header,
+    footer
+)
+
+
+load_theme()
 
 API_URL = "http://127.0.0.1:8000"
 
-st.title("📈 RadarSaham Dashboard")
+
+# ==========================
+# HEADER APLIKASI
+# ==========================
 
 
 def get_data(endpoint):
@@ -28,6 +40,63 @@ def get_data(endpoint):
         st.error(f"Koneksi ke API gagal: {e}")
         return []
 
+def get_ihsg_live():
+
+    try:
+        data_ihsg = yf.download(
+            "^JKSE",
+            period="5d",
+            interval="1d",
+            auto_adjust=False,
+            progress=False,
+            threads=False
+        )
+
+        if data_ihsg.empty or len(data_ihsg) < 2:
+            return None, None
+
+        if isinstance(data_ihsg.columns, pd.MultiIndex):
+            data_ihsg.columns = data_ihsg.columns.get_level_values(0)
+
+        harga_sekarang = float(
+            data_ihsg["Close"].iloc[-1]
+        )
+
+        harga_sebelumnya = float(
+            data_ihsg["Close"].iloc[-2]
+        )
+
+        perubahan_persen = (
+            (harga_sekarang - harga_sebelumnya)
+            / harga_sebelumnya
+        ) * 100
+
+        return harga_sekarang, perubahan_persen
+
+    except Exception:
+        return None, None
+    
+def get_foreign_flow_live():
+
+    try:
+        data = get_data("/stocks-db")
+        df = pd.DataFrame(data)
+
+        if df.empty or "foreign_flow" not in df.columns:
+            return None
+
+        df["foreign_flow"] = pd.to_numeric(
+            df["foreign_flow"],
+            errors="coerce"
+        )
+
+        total_foreign_flow = df["foreign_flow"].sum()
+
+        return total_foreign_flow
+
+    except Exception:
+        return None 
+
 if st.button("🔄 Update Semua Harga"):
     hasil = get_data("/stocks/update-all")
 
@@ -36,9 +105,10 @@ if st.button("🔄 Update Semua Harga"):
         st.dataframe(pd.DataFrame(hasil.get("data", [])))
 
 
-menu = st.sidebar.selectbox(
-    "Pilih Menu",
+menu = st.sidebar.radio(
+    "📂 Menu",
     [
+        "🏠 Dashboard",    
         "Semua Saham",
         "Top Broker",
         "Top Buy",
@@ -52,15 +122,64 @@ menu = st.sidebar.selectbox(
         "Export Excel",
         "Top 10 Smart Score",
         "Alert Trading",
-        "Candlestick Chart",
-        "Import Broker Summary",
+        "📈 Candlestick",
         "📋 Master Saham",
         "🤖 RadarSaham AI Scanner",
         "Auto Ranking Yahoo"
     ]
 )
 
-if menu == "Semua Saham":
+if menu == "🏠 Dashboard":
+
+    st.title("📈 RadarSaham")
+
+    st.caption(
+        "Smart Indonesian Stock Analysis Platform • Version 1.0"
+    )
+
+    st.divider()
+
+    ihsg_value, ihsg_delta = get_ihsg_live()
+
+    if ihsg_value is not None:
+        ihsg_text = f"{ihsg_value:,.2f}"
+        ihsg_delta_text = f"{ihsg_delta:+.2f}%"
+    else:
+        ihsg_text = "Data tidak tersedia"
+        ihsg_delta_text = None
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        kpi_card(
+            "📈 IHSG",
+            ihsg_text,
+            ihsg_delta_text
+        )
+
+    with col2:
+        kpi_card(
+            "💰 Foreign Flow",
+            "2.3 T",
+            "+350 B"
+        )
+
+    with col3:
+        kpi_card(
+            "🤖 Market",
+            "Bullish"
+        )
+
+    with col4:
+        kpi_card(
+            "⭐ Smart Score",
+            "91"
+        )
+
+    section_header("🔥 Top Smart Score")
+    st.info("Top Smart Score akan ditampilkan di sini.")
+
+elif menu == "Semua Saham":
 
     response = requests.get(f"{API_URL}/stocks-db")
     data = response.json()
@@ -630,7 +749,6 @@ elif menu == "Alert Trading":
                 else:
                     st.warning("⚠️ Risk Reward Kurang Menarik")
 
-            st.divider()
     
 elif menu == "Candlestick Chart":
     render_candlestick_page()
@@ -967,3 +1085,5 @@ elif menu == "Auto Ranking Yahoo":
                 fig,
                 use_container_width=True
             )
+
+footer()
