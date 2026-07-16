@@ -1,12 +1,259 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from sqlalchemy import text
 from app.database.connection import engine
 from app.models import Stock
+from io import BytesIO
+import pandas as pd
 import yfinance as yf
 
 app = FastAPI(title="RadarSaham API")
 
 
+# ==========================
+# MASTER SAHAM
+# ==========================
+
+def buat_tabel_master_saham():
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS master_stocks (
+                    id SERIAL PRIMARY KEY,
+                    kode VARCHAR(20) NOT NULL UNIQUE,
+                    nama VARCHAR(255) NOT NULL
+                )
+            """)
+        )
+buat_tabel_master_saham()
+
+@app.get("/stocks/master")
+def get_master_saham():
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT kode, nama
+                FROM master_stocks
+                ORDER BY kode
+            """)
+        )
+
+        return [
+            dict(row._mapping)
+            for row in result
+        ]
+
+
+@app.post("/stocks/master/import")
+async def import_master_saham(
+    file: UploadFile = File(...)
+):
+    if not file.filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Nama file tidak tersedia."
+        )
+
+    nama_file = file.filename.lower()
+    isi_file = await file.read()
+
+    try:
+        if nama_file.endswith(".csv"):
+            df = pd.read_csv(
+                BytesIO(isi_file)
+            )
+
+        elif nama_file.endswith((".xlsx", ".xls")):
+            df = pd.read_excel(
+                BytesIO(isi_file)
+            )
+
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Gunakan file CSV, XLS, atau XLSX."
+            )
+
+    except HTTPException:
+        raise
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Gagal membaca file: {error}"
+        )
+
+    if df.empty:
+        raise HTTPException(
+            status_code=400,
+            detail="File tidak memiliki data."
+        )
+
+    # ==========================
+    # NORMALISASI NAMA KOLOM
+    # ==========================
+
+    df.columns = (
+        df.columns
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .str.replace(" ", "_", regex=False)
+    )
+
+    # File BEI menggunakan kolom:
+    # "Kode" dan "Nama Perusahaan"
+    # Setelah dinormalisasi menjadi:
+    # "kode" dan "nama_perusahaan"
+
+    if "nama_perusahaan" in df.columns:
+        df = df.rename(
+            columns={
+                "nama_perusahaan": "nama"
+            }
+        )
+
+    # ==========================
+    # VALIDASI KOLOM
+    # ==========================
+
+    if "kode" not in df.columns:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Kolom 'Kode' tidak ditemukan. "
+                "Pastikan file memiliki kolom Kode."
+            )
+        )
+
+    if "nama" not in df.columns:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Kolom 'Nama Perusahaan' tidak ditemukan. "
+                "Pastikan file memiliki kolom Nama Perusahaan."
+            )
+        )
+
+    # ==========================
+    # PEMBERSIHAN DATA
+    # ==========================
+
+    df = df[
+        ["kode", "nama"]
+    ].copy()
+
+    df = df.dropna(
+        subset=["kode", "nama"]
+    )
+
+    df["kode"] = (
+        df["kode"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+
+    df["nama"] = (
+        df["nama"]
+        .astype(str)
+        .str.strip()
+    )
+
+    # Menghapus akhiran .JK jika sudah ada
+    df["kode"] = (
+        df["kode"]
+        .str.replace(
+            ".JK",
+            "",
+            regex=False
+        )
+    )
+
+    # Hanya menyimpan kode yang tidak kosong
+    df = df[
+        (df["kode"] != "") &
+        (df["nama"] != "")
+    ]
+
+    # Hapus kode saham duplikat
+    df = df.drop_duplicates(
+        subset=["kode"],
+        keep="last"
+    )
+
+    jumlah_baru = 0
+    jumlah_update = 0
+    jumlah_gagal = 0
+
+    # ==========================
+    # SIMPAN KE DATABASE
+    # ==========================
+
+    with engine.begin() as conn:
+        for _, row in df.iterrows():
+            kode = row["kode"]
+            nama = row["nama"]
+
+            try:
+                existing = conn.execute(
+                    text("""
+                        SELECT id
+                        FROM master_stocks
+                        WHERE kode = :kode
+                    """),
+                    {
+                        "kode": kode
+                    }
+                ).fetchone()
+
+                if existing:
+                    conn.execute(
+                        text("""
+                            UPDATE master_stocks
+                            SET nama = :nama
+                            WHERE kode = :kode
+                        """),
+                        {
+                            "kode": kode,
+                            "nama": nama
+                        }
+                    )
+
+                    jumlah_update += 1
+
+                else:
+                    conn.execute(
+                        text("""
+                            INSERT INTO master_stocks
+                            (
+                                kode,
+                                nama
+                            )
+                            VALUES
+                            (
+                                :kode,
+                                :nama
+                            )
+                        """),
+                        {
+                            "kode": kode,
+                            "nama": nama
+                        }
+                    )
+
+                    jumlah_baru += 1
+
+            except Exception:
+                jumlah_gagal += 1
+
+    return {
+        "message": "Import master saham selesai.",
+        "jumlah_data_file": len(df),
+        "jumlah_baru": jumlah_baru,
+        "jumlah_update": jumlah_update,
+        "jumlah_gagal": jumlah_gagal
+    }
+    
 @app.get("/")
 def root():
     return {"message": "Selamat datang di RadarSaham API"}
